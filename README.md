@@ -99,6 +99,37 @@ func main() {
 }
 ```
 
+### interval with start delay
+
+```golang
+package main
+
+import (
+	"fmt"
+	"time"
+
+	asynctask "github.com/simonwu-os/async-tasks-in-memory"
+)
+
+func TestIntervalWithDelayTask() *asynctask.AsyncTask {
+	now := time.Now()
+	callback := func() {
+		fmt.Println("task", time.Since(now))
+	}
+	task := asynctask.PostTask(callback,
+		asynctask.IntervalWithDelayTask(4*time.Millisecond, 15*time.Millisecond))
+
+	return task
+}
+
+func main() {
+	defer asynctask.WaitAndExit()
+	task := TestIntervalWithDelayTask()
+	task.WaitForFinished(100 * time.Millisecond)
+}
+
+```
+
 ## Contribution & Support
 
 Feel free to send a pull request if you consider there's something which can be improved. Also, please open up an issue if you run into a problem when using this library or just have a question.

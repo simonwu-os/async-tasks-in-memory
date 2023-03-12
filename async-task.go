@@ -312,11 +312,11 @@ func PostTask(callback Callback, options ...optionTask) *AsyncTask {
 
 	task_callback := func() {
 		callback()
-		atomic.StoreInt32(&async_task.called_count, 1)
-
 		if interval > 0 {
 			new_task := GetAsyncTask().PostIntervalTask(callback, interval)
 			async_task.replace_new_task(new_task)
+		} else {
+			atomic.StoreInt32(&async_task.called_count, 1)
 		}
 	}
 

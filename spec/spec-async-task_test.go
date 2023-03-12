@@ -122,4 +122,14 @@ var _ = Describe("AsyncTask,focus", func() {
 			Expect(result).To(MatchRegexp(expected))
 		}
 	})
+
+	It("Interval with Delay Time", func() {
+		result := 0
+		task := asynctask.PostTask(func() {
+			result += 10
+		}, asynctask.IntervalWithDelayTask(6*time.Millisecond, 15*time.Millisecond))
+		task.WaitForFinished(130 * time.Millisecond)
+		expected := 90
+		Expect(result).To(Equal(expected))
+	})
 })
