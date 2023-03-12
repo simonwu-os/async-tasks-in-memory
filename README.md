@@ -19,6 +19,25 @@
 
   We thank the authors of these projects for their sharing and contributions.
 
+## TimeWheel stragety
+
+  We use three TimeWheel to construct our async delay and interval tasks.
+
+```golang
+
+var cron_timetick_config = []struct {
+	duration time.Duration
+	count    int
+}{
+	{time.Millisecond * 5, 200},
+	{time.Second, 120},
+	{time.Second * 120, 60 * 12},
+}
+
+```
+
+So we use 5 millisecond for the minimum interval.
+
 ## Usage
 
 ### for async task in worker pool
