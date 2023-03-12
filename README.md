@@ -5,8 +5,8 @@
 
 ## Backgroud
 
-  For async task project there are threw modes.
-  One is  work pool mode, another is schedule mode, the last is time wheel mode.
+  For async task project there are three modes.
+  One is  worker pool mode, another is schedule mode, and the last is time wheel mode.
 
   We searched and compared many projects.
   At finally, we choose the two projects.
@@ -47,6 +47,34 @@ func main() {
    TestAyncTask()
 }
 
+```
+
+## delay task with time wheel
+
+```golang
+package main
+
+import (
+	"fmt"
+	"time"
+
+	asynctask "github.com/simonwu-os/async-tasks-in-memory"
+)
+
+func TestDelayTask() *asynctask.AsyncTask {
+	now := time.Now()
+	callback := func() {
+		fmt.Println("task", time.Since(now))
+	}
+	task := asynctask.PostTask(callback, asynctask.DelayTask(10*time.Millisecond))
+	return task
+}
+
+func main() {
+	defer asynctask.WaitAndExit()
+	task := TestDelayTask()
+	task.WaitForFinished(100*time.Millisecond)
+}
 ```
 
 ## Contribution & Support

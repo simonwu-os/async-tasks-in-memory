@@ -94,6 +94,37 @@ func (self *AsyncTask) replace_new_task(new_async_task *AsyncTask) {
 	self.called_count = new_async_task.called_count
 }
 
+func (self *AsyncTask) WaitForFinished(timeout time.Duration) {
+	if self.Finished() {
+		return
+	}
+	workersDone := make(chan struct{})
+	ctx, cancel_func := context.WithCancel(context.Background())
+	defer cancel_func()
+	go func(ctx context.Context) {
+	exit_for:
+		for {
+			if self.Finished() {
+				workersDone <- struct{}{}
+			}
+			select {
+			case <-ctx.Done():
+				break exit_for
+			default:
+				Sleep(2 * time.Millisecond)
+				break
+			}
+		}
+	}(ctx)
+	// Wait until either all workers have exited or the deadline is reached
+	select {
+	case <-workersDone:
+		return
+	case <-time.After(timeout):
+		return
+	}
+}
+
 func (self *AsyncTask) StopAndWait(deadline time.Duration) {
 	if self.CanCancel() {
 		self.sync_data.Lock()

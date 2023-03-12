@@ -43,6 +43,26 @@ var _ = Describe("AsyncTask,focus", func() {
 
 	It("PostWithDelay", func() {
 		result := 0
+		now := time.Now()
+		callback := func() {
+			result += 10
+			///fmt.Println("Callback at ", time.Since(now))
+		}
+		task := asynctask.PostTask(callback,
+			asynctask.DelayTask(5*time.Millisecond),
+		)
+		task.WaitForFinished(1000 * time.Millisecond)
+		expected := 10
+		Expect(result).To(Equal(expected))
+		{
+			result := time.Since(now)
+			expected := 10 * time.Millisecond
+			Expect(result).To(BeNumerically("<", expected))
+		}
+	})
+
+	It("PostIntervalWithDelay", func() {
+		result := 0
 		///now := time.Now()
 		callback := func() {
 			result += 10
