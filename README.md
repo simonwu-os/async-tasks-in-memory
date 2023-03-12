@@ -11,13 +11,16 @@
   We searched and compared many projects.
   At finally, we choose the two projects.
 
-  [alitto/pond](https://github.com/alitto/pond)
+* [alitto/pond](https://github.com/alitto/pond)
+
   Minimalistic and High-performance goroutine worker pool written in Go
 
-  [golang timewheel similar to glang std timer](https://github.com/rfyiamcool/go-timewheel)
+* [go-timewheel](https://github.com/rfyiamcool/go-timewheel)
+
   golang timewheel lib, similar to golang std timer
 
-  We thank the authors of these projects for their sharing and contributions.
+
+We thank the authors of these projects for their sharing and contributions.
 
 ## TimeWheel stragety
 
