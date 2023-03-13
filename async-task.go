@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/alitto/pond"
-	"github.com/rfyiamcool/go-timewheel"
+	"github.com/simonwu-os/go-timewheel/v2"
 )
 
 var (
