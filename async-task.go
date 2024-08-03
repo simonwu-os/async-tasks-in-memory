@@ -2,6 +2,7 @@ package asynctask
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,8 +24,12 @@ type AsyncTaskInMemory interface {
 
 	PostAsyncTask(callback Callback) *AsyncTask
 
+	///返回group,后面可以将group的异步消息做为一个整体，一起等待完成.
+	/// group.Submit(task) ...., group.Wait()
+
 	GroupContext(ctx context.Context) (*pond.TaskGroupWithContext, context.Context)
 
+	/// 退出整个异步环境. 一般无需调用.
 	WaitAndExit(timeout time.Duration)
 }
 
@@ -75,43 +80,76 @@ type AsyncTask struct {
 	time_wheel   *timewheel.TimeWheel
 	wheel_task   *timewheel.Task
 	called_count int32
-	sync_data    sync.Mutex
+	running      int32
 }
 
-func (self *AsyncTask) CanCancel() bool {
-	return self.time_wheel != nil
+func (self *AsyncTask) try_cancel_task() bool {
+	return atomic.CompareAndSwapInt32(&self.running, 0, 2)
+}
+
+func (self *AsyncTask) task_is_cancelled() bool {
+	return atomic.LoadInt32(&self.running) == 2
+}
+
+func (self *AsyncTask) on_task_done() {
+	atomic.AddInt32(&self.called_count, 1)
+	atomic.CompareAndSwapInt32(&self.running, 1, 0)
+}
+
+func (self *AsyncTask) on_task_start() bool {
+	return atomic.CompareAndSwapInt32(&self.running, 0, 1)
+}
+
+func (self *AsyncTask) IsRunning() bool {
+	return atomic.LoadInt32(&self.running) == 1
 }
 
 func (self *AsyncTask) Finished() bool {
-	return atomic.LoadInt32(&self.called_count) > 0
+	return self.CalledTimes() > 0
 }
 
-func (self *AsyncTask) replace_new_task(new_async_task *AsyncTask) {
-	self.sync_data.Lock()
-	defer self.sync_data.Unlock()
-	self.time_wheel = new_async_task.time_wheel
-	self.wheel_task = new_async_task.wheel_task
-	self.called_count = new_async_task.called_count
+func (self *AsyncTask) CalledTimes() int32 {
+	return atomic.LoadInt32(&self.called_count)
 }
 
-func (self *AsyncTask) WaitForFinished(timeout time.Duration) {
-	if self.Finished() {
-		return
+func (self *AsyncTask) can_cancel() bool {
+	return self.time_wheel != nil
+}
+
+func (self *AsyncTask) cancel_task() {
+	self.time_wheel.Remove(self.wheel_task)
+	self.wheel_task = nil
+	self.time_wheel = nil
+}
+
+func error_task_cancelled() error {
+	return fmt.Errorf("task is cancelled")
+}
+
+func (self *AsyncTask) WaitForFinished(timeout time.Duration) error {
+
+	if self.task_is_cancelled() {
+		return error_task_cancelled()
 	}
+	if self.Finished() {
+		return nil
+	}
+
 	workersDone := make(chan struct{})
 	ctx, cancel_func := context.WithCancel(context.Background())
 	defer cancel_func()
 	go func(ctx context.Context) {
 	exit_for:
 		for {
-			if self.Finished() {
+			if self.Finished() || self.task_is_cancelled() {
 				workersDone <- struct{}{}
+				break exit_for
 			}
 			select {
 			case <-ctx.Done():
 				break exit_for
 			default:
-				Sleep(2 * time.Millisecond)
+				Sleep(5 * time.Millisecond)
 				break
 			}
 		}
@@ -119,54 +157,39 @@ func (self *AsyncTask) WaitForFinished(timeout time.Duration) {
 	// Wait until either all workers have exited or the deadline is reached
 	select {
 	case <-workersDone:
-		return
+		if self.Finished() {
+			return nil
+		}
+		return error_task_cancelled()
 	case <-time.After(timeout):
-		return
+		return fmt.Errorf("time is up")
 	}
 }
 
-func (self *AsyncTask) StopAndWait(deadline time.Duration) {
-	if self.CanCancel() {
-		self.sync_data.Lock()
-		defer self.sync_data.Unlock()
-		workersDone := make(chan struct{})
-		go func() {
-			self.time_wheel.Remove(self.wheel_task)
-			workersDone <- struct{}{}
-		}()
-		// Wait until either all workers have exited or the deadline is reached
+func (self *AsyncTask) StopAndWait(deadline time.Duration) error {
+	if deadline < time.Millisecond*10 {
+		deadline = time.Millisecond * 10
+	}
+	for {
+		if self.try_cancel_task() {
+			break
+		}
 		select {
-		case <-workersDone:
-			return
 		case <-time.After(deadline):
-			return
+			return fmt.Errorf("time is up")
+		default:
+			Sleep(5 * time.Millisecond)
 		}
 	}
-}
-
-func newAsyncTaskWithTimeWheel(
-	time_wheel *timewheel.TimeWheel,
-	wheel_task *timewheel.Task,
-) *AsyncTask {
-	data := &AsyncTask{
-		time_wheel: time_wheel,
-		wheel_task: wheel_task,
+	if self.can_cancel() {
+		self.cancel_task()
 	}
-	return data
-}
-
-func newAsyncTask() *AsyncTask {
-	data := &AsyncTask{}
-	return data
+	return nil
 }
 
 type innerAsyncTaskInMemory struct {
 	cron_wheels []*timewheel.TimeWheel
 	work_pool   *pond.WorkerPool
-}
-
-func (self *innerAsyncTaskInMemory) Init() {
-
 }
 
 func (self *innerAsyncTaskInMemory) findTimeWheel(delay time.Duration) *timewheel.TimeWheel {
@@ -181,30 +204,59 @@ func (self *innerAsyncTaskInMemory) findTimeWheel(delay time.Duration) *timewhee
 	return ret
 }
 
+func (self *innerAsyncTaskInMemory) wrap_task_callback(callback Callback) (*AsyncTask, Callback) {
+	ret := &AsyncTask{}
+	wrap_callback := func() {
+		///已经进入cancel状态，停止运行.
+		if !ret.on_task_start() {
+			return
+		}
+		defer ret.on_task_done()
+		callback()
+	}
+	return ret, wrap_callback
+}
+
 func (self *innerAsyncTaskInMemory) PostDelayTask(
 	callback Callback,
 	delay time.Duration) *AsyncTask {
 
+	ret, callback_wrapped := self.wrap_task_callback(callback)
 	wheel := self.findTimeWheel(delay)
-	task := wheel.Add(delay, callback)
-	return newAsyncTaskWithTimeWheel(wheel, task)
+	task := wheel.Add(delay, callback_wrapped)
+
+	ret.time_wheel = wheel
+	ret.wheel_task = task
+	return ret
 }
 
 func (self *innerAsyncTaskInMemory) PostIntervalTask(
 	callback Callback,
 	interval time.Duration) *AsyncTask {
+	ret, callback_wrapped := self.wrap_task_callback(callback)
+
 	wheel := self.findTimeWheel(interval)
-	task := wheel.AddCron(interval, callback)
-	return newAsyncTaskWithTimeWheel(wheel, task)
+	task := wheel.AddCron(interval, callback_wrapped)
+
+	ret.time_wheel = wheel
+	ret.wheel_task = task
+	return ret
 }
 
 func (self *innerAsyncTaskInMemory) PostAsyncTask(callback Callback) *AsyncTask {
-	self.work_pool.Submit(callback)
-	return newAsyncTask()
+	ret, callback_wrapped := self.wrap_task_callback(callback)
+	self.work_pool.Submit(callback_wrapped)
+	return ret
 }
 
+///返回group,后面可以将group的异步消息做为一个整体，一起等待.
+
 func (self *innerAsyncTaskInMemory) GroupContext(ctx context.Context) (*pond.TaskGroupWithContext, context.Context) {
-	return self.work_pool.GroupContext(ctx)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	group, new_ctx := self.work_pool.GroupContext(ctx)
+	return group, new_ctx
 }
 
 func (self *innerAsyncTaskInMemory) WaitAndExit(timeout time.Duration) {
@@ -267,9 +319,8 @@ func GetAsyncTask() AsyncTaskInMemory {
 }
 
 type TaskOption struct {
-	interval        time.Duration
-	start_delay     time.Duration
-	normal_interval bool
+	interval    time.Duration
+	start_delay time.Duration
 }
 type optionTask func(*TaskOption)
 
@@ -283,7 +334,6 @@ func IntervalWithDelayTask(start_delay time.Duration, interal time.Duration) opt
 func IntervalTask(interal time.Duration) optionTask {
 	return func(o *TaskOption) {
 		o.interval = interal
-		o.normal_interval = true
 	}
 }
 
@@ -303,27 +353,23 @@ func PostTask(callback Callback, options ...optionTask) *AsyncTask {
 		op(task_option)
 	}
 
-	if task_option.normal_interval {
-		return GetAsyncTask().PostIntervalTask(callback, task_option.interval)
-	}
-
-	var async_task *AsyncTask = nil
-	interval := task_option.interval
-
-	task_callback := func() {
-		callback()
-		if interval > 0 {
-			new_task := GetAsyncTask().PostIntervalTask(callback, interval)
-			async_task.replace_new_task(new_task)
+	if task_option.start_delay > 0 {
+		if task_option.interval == 0 {
+			return GetAsyncTask().PostDelayTask(callback, task_option.start_delay)
 		} else {
-			atomic.StoreInt32(&async_task.called_count, 1)
+			var async_task *AsyncTask
+			wrap_callback := func() {
+				callback()
+				inner_task := GetAsyncTask().PostIntervalTask(callback, task_option.interval)
+				async_task.time_wheel = inner_task.time_wheel
+				async_task.wheel_task = inner_task.wheel_task
+			}
+			async_task = GetAsyncTask().PostAsyncTask(wrap_callback)
+			return async_task
 		}
-	}
-
-	if task_option.start_delay == 0 {
-		async_task = GetAsyncTask().PostAsyncTask(task_callback)
+	} else if task_option.interval > 0 {
+		return GetAsyncTask().PostIntervalTask(callback, task_option.interval)
 	} else {
-		async_task = GetAsyncTask().PostDelayTask(task_callback, task_option.start_delay)
+		return GetAsyncTask().PostAsyncTask(callback)
 	}
-	return async_task
 }

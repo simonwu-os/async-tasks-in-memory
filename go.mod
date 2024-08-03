@@ -1,9 +1,9 @@
 module github.com/simonwu-os/async-tasks-in-memory
 
-go 1.19
+go 1.22
 
 require (
-	github.com/alitto/pond v1.8.3
+	github.com/alitto/pond v1.9.1
 	github.com/onsi/ginkgo/v2 v2.9.0
 	github.com/onsi/gomega v1.27.3
 	github.com/simonwu-os/go-timewheel/v2 v2.0.0
