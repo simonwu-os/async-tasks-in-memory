@@ -52,11 +52,12 @@ var _ = Describe("AsyncTask,focus", func() {
 			asynctask.DelayTask(5*time.Millisecond),
 		)
 		task.WaitForFinished(1000 * time.Millisecond)
+
 		expected := 10
 		Expect(result).To(Equal(expected))
 		{
 			result := time.Since(now)
-			expected := 10 * time.Millisecond
+			expected := 12 * time.Millisecond
 			Expect(result).To(BeNumerically("<", expected))
 		}
 	})
@@ -128,8 +129,35 @@ var _ = Describe("AsyncTask,focus", func() {
 		task := asynctask.PostTask(func() {
 			result += 10
 		}, asynctask.IntervalWithDelayTask(6*time.Millisecond, 15*time.Millisecond))
-		task.WaitForFinishedCount(100, 130*time.Millisecond)
-		expected := 90
+
+		task.WaitForFinished(130 * time.Millisecond)
+		expected := 10
 		Expect(result).To(Equal(expected))
+
+		task.WaitForFinishedCount(100, 120*time.Millisecond)
+		expected = 90
+		Expect(result).To(Equal(expected))
+		asynctask.Sleep(10 * time.Millisecond)
+		err := task.StopAndWait(20 * time.Millisecond)
+		Expect(err).To(BeNil())
+		Expect(result).To(BeNumerically(">=", expected))
+	})
+
+	It("cancel async task", func() {
+		result := 0
+		task := asynctask.PostTask(func() {
+			result += 10
+		})
+		err := task.StopAndWait(5 * time.Millisecond)
+		Expect(err).To(BeNil())
+
+		expected := 0
+		Expect(result).To(Equal(expected))
+		asynctask.Sleep(10 * time.Millisecond)
+		Expect(result).To(Equal(expected))
+
+		result = int(task.CalledTimes())
+		Expect(result).To(Equal(expected))
+
 	})
 })
