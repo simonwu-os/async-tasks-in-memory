@@ -54,7 +54,7 @@ type pond_workpool_config struct {
 }
 
 type AsyncTaskInMemoryConfig struct {
-	single_ton       AsyncTaskInMemory
+	single_ton       *innerAsyncTaskInMemory
 	init_once        sync.Once
 	pond_config      *pond_workpool_config
 	init_pond_config sync.Once
@@ -126,12 +126,20 @@ func error_task_cancelled() error {
 	return fmt.Errorf("task is cancelled")
 }
 
-func (self *AsyncTask) WaitForFinished(timeout time.Duration) error {
+func (self *AsyncTask) finished_call(call_times int32) bool {
+	return self.CalledTimes() >= call_times
+}
+
+func (self *AsyncTask) WaitForFinishedCount(call_times int32, timeout time.Duration) error {
+
+	if call_times < 1 {
+		call_times = 1
+	}
 
 	if self.task_is_cancelled() {
 		return error_task_cancelled()
 	}
-	if self.Finished() {
+	if self.finished_call(call_times) {
 		return nil
 	}
 
@@ -141,7 +149,7 @@ func (self *AsyncTask) WaitForFinished(timeout time.Duration) error {
 	go func(ctx context.Context) {
 	exit_for:
 		for {
-			if self.Finished() || self.task_is_cancelled() {
+			if self.finished_call(call_times) || self.task_is_cancelled() {
 				workersDone <- struct{}{}
 				break exit_for
 			}
@@ -157,13 +165,17 @@ func (self *AsyncTask) WaitForFinished(timeout time.Duration) error {
 	// Wait until either all workers have exited or the deadline is reached
 	select {
 	case <-workersDone:
-		if self.Finished() {
+		if self.finished_call(call_times) {
 			return nil
 		}
 		return error_task_cancelled()
 	case <-time.After(timeout):
 		return fmt.Errorf("time is up")
 	}
+}
+
+func (self *AsyncTask) WaitForFinished(timeout time.Duration) error {
+	return self.WaitForFinishedCount(1, timeout)
 }
 
 func (self *AsyncTask) StopAndWait(deadline time.Duration) error {
@@ -204,8 +216,15 @@ func (self *innerAsyncTaskInMemory) findTimeWheel(delay time.Duration) *timewhee
 	return ret
 }
 
-func (self *innerAsyncTaskInMemory) wrap_task_callback(callback Callback) (*AsyncTask, Callback) {
-	ret := &AsyncTask{}
+func (self *innerAsyncTaskInMemory) wrap_task_callback(
+	callback Callback,
+	async_task *AsyncTask,
+) (*AsyncTask, Callback) {
+
+	ret := async_task
+	if async_task == nil {
+		ret = &AsyncTask{}
+	}
 	wrap_callback := func() {
 		///已经进入cancel状态，停止运行.
 		if !ret.on_task_start() {
@@ -221,7 +240,7 @@ func (self *innerAsyncTaskInMemory) PostDelayTask(
 	callback Callback,
 	delay time.Duration) *AsyncTask {
 
-	ret, callback_wrapped := self.wrap_task_callback(callback)
+	ret, callback_wrapped := self.wrap_task_callback(callback, nil)
 	wheel := self.findTimeWheel(delay)
 	task := wheel.Add(delay, callback_wrapped)
 
@@ -233,7 +252,15 @@ func (self *innerAsyncTaskInMemory) PostDelayTask(
 func (self *innerAsyncTaskInMemory) PostIntervalTask(
 	callback Callback,
 	interval time.Duration) *AsyncTask {
-	ret, callback_wrapped := self.wrap_task_callback(callback)
+	return self.inner_post_interval_task(callback, interval, nil)
+}
+
+func (self *innerAsyncTaskInMemory) inner_post_interval_task(
+	callback Callback,
+	interval time.Duration,
+	async_task *AsyncTask,
+) *AsyncTask {
+	ret, callback_wrapped := self.wrap_task_callback(callback, async_task)
 
 	wheel := self.findTimeWheel(interval)
 	task := wheel.AddCron(interval, callback_wrapped)
@@ -244,7 +271,7 @@ func (self *innerAsyncTaskInMemory) PostIntervalTask(
 }
 
 func (self *innerAsyncTaskInMemory) PostAsyncTask(callback Callback) *AsyncTask {
-	ret, callback_wrapped := self.wrap_task_callback(callback)
+	ret, callback_wrapped := self.wrap_task_callback(callback, nil)
 	self.work_pool.Submit(callback_wrapped)
 	return ret
 }
@@ -318,6 +345,10 @@ func GetAsyncTask() AsyncTaskInMemory {
 	return async_task_config.single_ton
 }
 
+func inner_get_async_task() *innerAsyncTaskInMemory {
+	return async_task_config.single_ton
+}
+
 type TaskOption struct {
 	interval    time.Duration
 	start_delay time.Duration
@@ -360,9 +391,7 @@ func PostTask(callback Callback, options ...optionTask) *AsyncTask {
 			var async_task *AsyncTask
 			wrap_callback := func() {
 				callback()
-				inner_task := GetAsyncTask().PostIntervalTask(callback, task_option.interval)
-				async_task.time_wheel = inner_task.time_wheel
-				async_task.wheel_task = inner_task.wheel_task
+				inner_get_async_task().inner_post_interval_task(callback, task_option.interval, async_task)
 			}
 			async_task = GetAsyncTask().PostAsyncTask(wrap_callback)
 			return async_task

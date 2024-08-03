@@ -128,7 +128,7 @@ var _ = Describe("AsyncTask,focus", func() {
 		task := asynctask.PostTask(func() {
 			result += 10
 		}, asynctask.IntervalWithDelayTask(6*time.Millisecond, 15*time.Millisecond))
-		task.WaitForFinished(130 * time.Millisecond)
+		task.WaitForFinishedCount(100, 130*time.Millisecond)
 		expected := 90
 		Expect(result).To(Equal(expected))
 	})
